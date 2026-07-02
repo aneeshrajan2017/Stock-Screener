@@ -7,7 +7,7 @@ import json
 # ⚠️ https://script.google.com/macros/s/AKfycbxx1on49uwOmyNl-xnutHxxa4I6J4qbYU8mS-TBc26By5idnCxRs5qzDvftSUQEWtl1-Q/exec
 
 # -------------------------------------------------------------
-WEB_APP_URL = "YOUR_WEB_APP_URL_HERE"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwZAmfVaEtxW-ZwEIihnYORk0m5626jFRXLw3QMm0Y9xI8pSjWq1Ti4E6ljV8dpT0ij9A/exec"
 
 def get_nifty250_tickers():
     url = "https://archives.nseindia.com/content/indices/ind_niftylargemidcap250_list.csv"
