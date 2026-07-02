@@ -7,12 +7,11 @@ import time
 # -------------------------------------------------------------
 # ⚠️ ഇവിടെ നിങ്ങളുടെ ഗൂഗിൾ ആപ്പ് സ്ക്രിപ്റ്റ് യുആർഎൽ (Web App URL) പേസ്റ്റ് ചെയ്യുക
 # -------------------------------------------------------------
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxt4YkIwOTZxtga_xRFVGgOVAkRbbG1o29lmYJJlcB4pQmm0bugP83i3wCQWay9Y7sGzg/exec"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwuM9--n_TSBNLpmN6Z4eokZu141CsmpgYIY6OFo5JGrHyz69rX9tEiO4fU0N8XTADQaw/exec"
 
 def get_nifty250_tickers():
     url = "https://archives.nseindia.com/content/indices/ind_niftylargemidcap250_list.csv"
     try:
-        # NSE സൈറ്റിൽ നിന്ന് ലിസ്റ്റ് എടുക്കുന്നു
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=15)
         if response.status_code == 200:
@@ -22,15 +21,9 @@ def get_nifty250_tickers():
             tickers = df['Symbol'].tolist()
             return [str(t).strip() + ".NS" for t in tickers if pd.notna(t)]
     except Exception as e:
-        print("NSE ലിസ്റ്റ് എടുക്കാൻ പറ്റിയില്ല, ബാക്കപ്പ് ലിസ്റ്റ് ഉപയോഗിക്കുന്നു:", e)
+        print("NSE ലിസ്റ്റ് എടുക്കാൻ പറ്റിയില്ല:", e)
     
-    # NSE സൈറ്റ് ഡൗൺ ആണെങ്കിൽ ഉപയോഗിക്കാൻ 20 പ്രമുഖ കമ്പനികളുടെ ബാക്കപ്പ് ലിസ്റ്റ്
-    return [
-        "BEL.NS", "POLYCAB.NS", "TATACHEM.NS", "ASTRAL.NS", "VOLTAS.NS",
-        "CONCOR.NS", "CUMMINSIND.NS", "DEEPAKNTR.NS", "HEG.NS", "IRCTC.NS",
-        "JINDALSTEL.NS", "LICHSGFIN.NS", "M&MFIN.NS", "MRF.NS", "RELIANCE.NS",
-        "SBICARD.NS", "SUNTV.NS", "TATACONSUM.NS", "TRENT.NS", "WIPRO.NS"
-    ]
+    return ["BEL.NS", "POLYCAB.NS", "TATACHEM.NS", "ASTRAL.NS", "VOLTAS.NS"]
 
 def analyze_stocks():
     tickers = get_nifty250_tickers()
@@ -39,50 +32,55 @@ def analyze_stocks():
     print(f"മൊത്തം {len(tickers)} കമ്പനികൾ പരിശോധിക്കുന്നു...")
     
     for count, ticker in enumerate(tickers, 1):
+        # ബ്ലോക്ക് ഒഴിവാക്കാൻ ചെറിയ ഗ്യാപ്പ്
+        time.sleep(1)
+        
+        company_name = ticker.replace(".NS", "")
+        current_price = 0
+        dma_200 = 0
+        current_rsi = 0
+        debt_to_equity = 0
+        status = "❌ ERROR"
+        signal = "❌ ERROR"
+        
         try:
-            # യാഹൂ ഫിനാൻസ് ബ്ലോക്ക് ചെയ്യാതിരിക്കാൻ ഓരോ കമ്പനിക്കും ഇടയിൽ 1.5 സെക്കൻഡ് ഗ്യാപ്പ് ഇടുന്നു
-            time.sleep(1.5)
-            
             stock = yf.Ticker(ticker)
             info = stock.info
+            company_name = info.get('longName', company_name)
             
-            # കമ്പനിയുടെ പേര് എടുക്കുന്നു
-            company_name = info.get('longName', ticker)
-            print(f"({count}/{len(tickers)}) {company_name} ({ticker}) പരിശോധിക്കുന്നു...")
+            # Debt to Equity
+            debt = info.get('debtToEquity', None)
+            debt_to_equity = round(debt / 100.0, 2) if debt is not None else 0
             
-            # 1. കടം പരിശോധിക്കുന്നു (Debt to Equity)
-            debt_to_equity = info.get('debtToEquity', 0)
-            if debt_to_equity is not None:
-                debt_to_equity = debt_to_equity / 100.0
-            else:
-                debt_to_equity = 0
-                
-            # കടം 0.5-ൽ കൂടുതൽ ആണെങ്കിൽ ആ കമ്പനിയെ ഒഴിവാക്കുന്നു
             if debt_to_equity > 0.5:
+                status = "⚠️ HIGH DEBT"
+                signal = "⚪ WAIT"
+                screened_data.append([company_name, ticker.replace(".NS", ""), 0, 0, 0, debt_to_equity, status, signal])
                 continue
                 
-            # 2. വില വിവരങ്ങൾ (RSI, DMA) എടുക്കുന്നു
+            # Prices History
             hist = stock.history(period="1y")
             if len(hist) < 200:
+                status = "⚠️ NO HISTORY"
+                signal = "⚪ WAIT"
+                screened_data.append([company_name, ticker.replace(".NS", ""), 0, 0, 0, debt_to_equity, status, signal])
                 continue
                 
             close_prices = hist['Close']
-            current_price = close_prices.iloc[-1]
-            
+            current_price = round(close_prices.iloc[-1], 2)
             dma_50 = close_prices.rolling(window=50).mean().iloc[-1]
-            dma_200 = close_prices.rolling(window=200).mean().iloc[-1]
+            dma_200 = round(close_prices.rolling(window=200).mean().iloc[-1], 2)
             
-            # RSI കണക്കുകൂട്ടൽ
+            # RSI
             delta = close_prices.diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             rsi_series = 100 - (100 / (1 + rs))
-            
-            current_rsi = rsi_series.iloc[-1]
+            current_rsi = round(rsi_series.iloc[-1], 2)
             prev_rsi = rsi_series.iloc[-2]
             
-            # സ്ട്രാറ്റജി കണ്ടീഷനുകൾ
+            # Strategy
             is_above_dma = current_price > dma_50 and current_price > dma_200
             is_near_support = current_price < (dma_50 * 1.05)
             is_rsi_good = 30 <= current_rsi <= 48
@@ -95,32 +93,23 @@ def analyze_stocks():
                 status = "📉 CHEAP"
                 if is_above_dma and is_near_support and is_rsi_turning_up:
                     signal = "🟢 PERFECT BUY"
-            
-            screened_data.append([
-                company_name,
-                ticker.replace(".NS", ""),
-                round(current_price, 2),
-                round(dma_200, 2),
-                round(current_rsi, 2),
-                round(debt_to_equity, 2),
-                status,
-                signal
-            ])
-            
+                    
         except Exception as e:
-            print(f"{ticker} സ്കാൻ ചെയ്യുന്നതിൽ ചെറിയൊരു തടസ്സം വന്നു (വിട്ടുകളയുന്നു): {e}")
-            continue
+            print(f"{ticker} എറർ: {e}")
+            status = "❌ DATA ERROR"
+            signal = "⚪ WAIT"
             
-    # ഡാറ്റ ഗൂഗിൾ ഷീറ്റിലേക്ക് അയക്കുന്നു
+        screened_data.append([company_name, ticker.replace(".NS", ""), current_price, dma_200, current_rsi, debt_to_equity, status, signal])
+        print(f"({count}/{len(tickers)}) {company_name} - പൂർത്തിയായി")
+            
+    # Upload to Sheets
     if screened_data and WEB_APP_URL != "YOUR_WEB_APP_URL_HERE":
         try:
             headers = {'Content-Type': 'application/json'}
             response = requests.post(WEB_APP_URL, data=json.dumps(screened_data), headers=headers, timeout=60)
             print("ഷീറ്റ് അപ്‌ഡേറ്റ് സ്റ്റാറ്റസ്:", response.text)
         except Exception as e:
-            print("ഷീറ്റിലേക്ക് ഡാറ്റ അയക്കാൻ പറ്റിയില്ല:", e)
-    else:
-        print("അയക്കാൻ തക്കവണ്ണം ഡാറ്റ ഒന്നും കണ്ടെത്തിയില്ല അല്ലെങ്കിൽ URL നൽകിയിട്ടില്ല.")
+            print("ഷീറ്റിലേക്ക് അയക്കാൻ പറ്റിയില്ല:", e)
 
 if __name__ == "__main__":
     analyze_stocks()
