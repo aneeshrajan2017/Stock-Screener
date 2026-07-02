@@ -25,7 +25,7 @@ def analyze_stocks():
     print("കമ്പനികൾ പരിശോധിക്കുന്നു...")
     
     # കൃത്യമായ ഫിൽട്ടറിങ്ങിനായി ആദ്യത്തെ 60 കമ്പനികൾ പരിശോധിക്കുന്നു
-    for ticker in tickers[:60]:
+    for ticker in tickers:
         try:
             stock = yf.Ticker(ticker)
             info = stock.info
