@@ -7,7 +7,7 @@ import time
 # -------------------------------------------------------------
 # ⚠️ ഇവിടെ നിങ്ങളുടെ ഗൂഗിൾ ആപ്പ് സ്ക്രിപ്റ്റ് യുആർഎൽ (Web App URL) പേസ്റ്റ് ചെയ്യുക
 # -------------------------------------------------------------
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwuM9--n_TSBNLpmN6Z4eokZu141CsmpgYIY6OFo5JGrHyz69rX9tEiO4fU0N8XTADQaw/exec"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwRtdiFNoc-WIroNoCtNUUWQNAplzusjRHJvf1S76iWooWsLyxl3RLLPg8WpryIoW_LFA/exec"
 
 def get_nifty250_tickers():
     url = "https://archives.nseindia.com/content/indices/ind_niftylargemidcap250_list.csv"
@@ -21,7 +21,7 @@ def get_nifty250_tickers():
             tickers = df['Symbol'].tolist()
             return [str(t).strip() + ".NS" for t in tickers if pd.notna(t)]
     except Exception as e:
-        print("NSE ലിസ്റ്റ് എടുക്കാൻ പറ്റിയില്ല:", e)
+        print("NSE ലിസ്റ്റ് എടുക്കാൻ പറ്റിയില്ല, ബാക്കപ്പ് ഉപയോഗിക്കുന്നു:", e)
     
     return ["BEL.NS", "POLYCAB.NS", "TATACHEM.NS", "ASTRAL.NS", "VOLTAS.NS"]
 
@@ -32,7 +32,7 @@ def analyze_stocks():
     print(f"മൊത്തം {len(tickers)} കമ്പനികൾ പരിശോധിക്കുന്നു...")
     
     for count, ticker in enumerate(tickers, 1):
-        # ബ്ലോക്ക് ഒഴിവാക്കാൻ ചെറിയ ഗ്യാപ്പ്
+        # യാഹൂ ഫിനാൻസ് ബ്ലോക്ക് ചെയ്യാതിരിക്കാൻ 1 സെക്കൻഡ് ഗ്യാപ്പ് നൽകുന്നു
         time.sleep(1)
         
         company_name = ticker.replace(".NS", "")
@@ -40,8 +40,8 @@ def analyze_stocks():
         dma_200 = 0
         current_rsi = 0
         debt_to_equity = 0
-        status = "❌ ERROR"
-        signal = "❌ ERROR"
+        status = "⏳ WAIT"
+        signal = "⚪ WAIT"
         
         try:
             stock = yf.Ticker(ticker)
@@ -54,7 +54,6 @@ def analyze_stocks():
             
             if debt_to_equity > 0.5:
                 status = "⚠️ HIGH DEBT"
-                signal = "⚪ WAIT"
                 screened_data.append([company_name, ticker.replace(".NS", ""), 0, 0, 0, debt_to_equity, status, signal])
                 continue
                 
@@ -62,7 +61,6 @@ def analyze_stocks():
             hist = stock.history(period="1y")
             if len(hist) < 200:
                 status = "⚠️ NO HISTORY"
-                signal = "⚪ WAIT"
                 screened_data.append([company_name, ticker.replace(".NS", ""), 0, 0, 0, debt_to_equity, status, signal])
                 continue
                 
@@ -80,14 +78,11 @@ def analyze_stocks():
             current_rsi = round(rsi_series.iloc[-1], 2)
             prev_rsi = rsi_series.iloc[-2]
             
-            # Strategy
+            # Strategy Conditions
             is_above_dma = current_price > dma_50 and current_price > dma_200
             is_near_support = current_price < (dma_50 * 1.05)
             is_rsi_good = 30 <= current_rsi <= 48
             is_rsi_turning_up = current_rsi > prev_rsi
-            
-            status = "⏳ WAIT"
-            signal = "⚪ WAIT"
             
             if is_rsi_good:
                 status = "📉 CHEAP"
@@ -97,10 +92,9 @@ def analyze_stocks():
         except Exception as e:
             print(f"{ticker} എറർ: {e}")
             status = "❌ DATA ERROR"
-            signal = "⚪ WAIT"
             
         screened_data.append([company_name, ticker.replace(".NS", ""), current_price, dma_200, current_rsi, debt_to_equity, status, signal])
-        print(f"({count}/{len(tickers)}) {company_name} - പൂർത്തിയായി")
+        print(f"({count}/{len(tickers)}) {company_name} - പരിശോധന കഴിഞ്ഞു")
             
     # Upload to Sheets
     if screened_data and WEB_APP_URL != "YOUR_WEB_APP_URL_HERE":
