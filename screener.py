@@ -35,8 +35,7 @@ def fetch_nse_etf_symbols():
     url = "https://www.nseindia.com/api/etf"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9'
+        'Accept': 'application/json'
     }
     try:
         session = requests.Session()
@@ -46,40 +45,28 @@ def fetch_nse_etf_symbols():
         if response.status_code == 200:
             data = response.json()
             rows = data.get('data', [])
-            symbols = {row['symbol'].strip().upper() for row in rows if row.get('symbol')}
-            if symbols:
-                print(f"Fetched {len(symbols)} ETF symbols from NSE")
-                return symbols
+            return {row['symbol'].strip().upper() for row in rows if row.get('symbol')}
     except Exception as e:
-        print(f"Could not fetch NSE ETF list, using keyword fallback only: {e}")
+        print(f"ETF Fetch fallback active: {e}")
     return set()
 
 def is_etf_or_trust(symbol, name, etf_symbol_set):
-    symbol_upper = (symbol or '').strip().upper()
-    name_upper = (name or '').strip().upper()
-    if symbol_upper in etf_symbol_set:
-        return True
-    for keyword in ETF_NAME_KEYWORDS:
-        if keyword in symbol_upper or keyword in name_upper:
-            return True
+    sym_u = (symbol or '').strip().upper()
+    nm_u = (name or '').strip().upper()
+    if sym_u in etf_symbol_set: return True
+    for kw in ETF_NAME_KEYWORDS:
+        if kw in sym_u or kw in nm_u: return True
     return False
 
 # 3. NSE Data Fetcher
 def fetch_bhavcopy_for_date(date_obj, etf_symbol_set):
     date_str = date_obj.strftime("%Y%m%d")
     url = f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date_str}_F_0000.csv.zip"
-    
-    # NSE ബ്ലോക്ക് ചെയ്യാതിരിക്കാൻ ആവശ്യമായ ശക്തമായ ബ്രൗസർ ഹെഡറുകൾ
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5'
-    }
+    headers = {'User-Agent': 'Mozilla/5.0'}
 
     try:
-        print(f"Checking NSE file for date: {date_str}")
-        response = requests.get(url, headers=headers, timeout=25)
-        
+        print(f"Checking file for {date_str}")
+        response = requests.get(url, headers=headers, timeout=20)
         if response.status_code == 200:
             with zipfile.ZipFile(io.BytesIO(response.content)) as z:
                 csv_filename = z.namelist()[0]
@@ -93,61 +80,57 @@ def fetch_bhavcopy_for_date(date_obj, etf_symbol_set):
                     turnover_col = next((c for c in ['TtlTrfVal', 'TOTTRDVAL'] if c in df.columns), None)
                     name_col = next((c for c in ['FinInstrmNm', 'SECURITY'] if c in df.columns), None)
 
-                    if not all([sym_col, close_col, series_col, turnover_col]):
-                        print("Required columns missing in CSV structure!")
-                        return None
+                    if not all([sym_col, close_col, series_col, turnover_col]): return None
 
-                    # Filter only Equity shares
                     df = df[df[series_col] == 'EQ']
-
-                    # Filter out ETFs / REITs / InvITs
-                    before_count = len(df)
-                    df = df[~df.apply(lambda row: is_etf_or_trust(row[sym_col], row[name_col] if name_col else '', etf_symbol_set), axis=1)]
-                    print(f"Removed {before_count - len(df)} ETF/REIT/InvIT rows")
-
-                    # Filter out high priced stocks
+                    df = df[~df.apply(lambda r: is_etf_or_trust(r[sym_col], r[name_col] if name_col else '', etf_symbol_set), axis=1)]
                     df = df[df[close_col] <= MAX_PRICE]
-
-                    # Sort by Turnover to get most liquid stocks
                     df = df.sort_values(by=turnover_col, ascending=False)
+                    
                     top_250 = df.head(250)
-
-                    # Return Data
-                    return top_250[[sym_col, turnover_col, close_col]].values.tolist()
-        else:
-            print(f"File not available for {date_str} (Status Code: {response.status_code})")
+                    
+                    # ഫോർമുലകൾ ഗൂഗിൾ ഷീറ്റിലേക്ക് നേരിട്ട് ഇൻജക്ട് ചെയ്യുന്ന ലോജിക്
+                    final_rows = []
+                    for idx, row in top_250.iterrows():
+                        ticker = str(row[sym_col]).strip()
+                        yahoo_ticker = f"{ticker}.NS"
+                        
+                        # കോഡിങ് കൊട്ടേഷൻ എററുകൾ വരാത്ത രീതിയിൽ ഫോർമുലകൾ മാറ്റിയത്:
+                        live_price_f = f'=GOOGLEFINANCE("{yahoo_ticker}", "price")'
+                        dma200_f = f'=AVERAGE(INDEX(GOOGLEFINANCE("{yahoo_ticker}", "price", TODAY()-300, TODAY()), 0, 2))'
+                        
+                        final_rows.append([ticker, float(row[turnover_col]), live_price_f, dma200_f])
+                        
+                    return final_rows
     except Exception as e:
-        print(f"Error fetching/processing Bhavcopy for {date_str}: {str(e)}")
+        print(f"Error logic: {str(e)}")
     return None
 
 # 4. Execution Logic
-date = datetime.utcnow() + timedelta(hours=5, minutes=30) # IST conversion
+date = datetime.utcnow() + timedelta(hours=5, minutes=30)
 etf_symbol_set = fetch_nse_etf_symbols()
-
 data_to_insert = None
 fetched_date_str = ""
 
 for i in range(7):
     test_date = date - timedelta(days=i)
-    if test_date.weekday() >= 5: # Skip weekends
-        continue
+    if test_date.weekday() >= 5: continue
     data_to_insert = fetch_bhavcopy_for_date(test_date, etf_symbol_set)
     if data_to_insert:
         fetched_date_str = test_date.strftime('%d-%b-%Y')
         break
 
-# 5. Update Google Sheet
+# 5. Update Sheet
 if data_to_insert:
     try:
-        worksheet.batch_clear(['A2:C251'])
+        worksheet.batch_clear(['A2:D251'])
         worksheet.update(range_name='A2', values=data_to_insert)
 
         ist_now = (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime('%d-%b %H:%M')
         status_msg = f"Data Date: {fetched_date_str} | Last Update: {ist_now} (IST)"
-        
         worksheet.update(range_name='K2', values=[[status_msg]])
-        print(f"SUCCESS: Sheet successfully updated for {fetched_date_str}")
+        print(f"SUCCESS: Updated for {fetched_date_str}")
     except Exception as e:
-        print(f"Google Sheet API Error: {str(e)}")
+        print(f"Google Sheet Error: {str(e)}")
 else:
-    print("FAILED: No valid NSE Bhavcopy file found in the last 7 days.")
+    print("FAILED: No file found.")
