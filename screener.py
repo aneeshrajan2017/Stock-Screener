@@ -25,7 +25,7 @@ scope = [
 creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 client = gspread.authorize(creds)
 
-spreadsheet_id = "1FhVIdKHlPFGoMjwZFtcKTOv7MwYOLQB6fzj8bo6DBuw"
+spreadsheet_id = "H0nWror8jHtgkfjQna_ua2uCxFtDRx47eTWiD8"
 worksheet = client.open_by_key(spreadsheet_id).worksheet("Top 250 Stocks")
 
 ETF_NAME_KEYWORDS = ['ETF', 'BEES', 'REIT', 'INVIT', 'INVT', 'LIQUIDBEES', 'GOLDBEES', 'NIFTYBEES']
