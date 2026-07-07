@@ -7,7 +7,7 @@ import time
 # -------------------------------------------------------------
 # ⚠️ ഇവിടെ നിങ്ങളുടെ ഗൂഗിൾ ആപ്പ് സ്ക്രിപ്റ്റ് യുആർഎൽ (Web App URL) പേസ്റ്റ് ചെയ്യുക
 # -------------------------------------------------------------
-WEB_APP_URL = "H0nWror8jHtgkfjQna_ua2uCxFtDRx47eTWiD8"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyuCKvRSkJvgP2lfYZbjVqcYdGby_o5uXP1FEmz5_slGNYsa93Hv6oubf2bYR_oTGNhgQ/exec"
 
 def get_nifty250_tickers():
     url = "https://archives.nseindia.com/content/indices/ind_niftylargemidcap250_list.csv"
