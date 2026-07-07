@@ -1,125 +1,153 @@
-import yfinance as yf
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import requests
+import zipfile
+import io
+from datetime import datetime, timedelta
+import os
 import json
-import time
 
-# -------------------------------------------------------------
-# ⚠️ ഇവിടെ നിങ്ങളുടെ ഗൂഗിൾ ആപ്പ് സ്ക്രിപ്റ്റ് യുആർഎൽ (Web App URL) പേസ്റ്റ് ചെയ്യുക
-# -------------------------------------------------------------
-WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyqhxOvby8sLiy4Pcxigk4G2RVpEelh1yhZ8IH-O1ZL0VJYqqDSuRb1glRt1dxzW_VlCA/exec"
+# 1. Credentials Setup
+creds_json = os.environ.get('GCP_CREDENTIALS')
 
-def get_nifty250_tickers():
-    url = "https://archives.nseindia.com/content/indices/ind_niftylargemidcap250_list.csv"
+if not creds_json:
+    print("CRITICAL: GCP_CREDENTIALS secret missing!")
+    exit(1)
+
+creds_dict = json.loads(creds_json)
+
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
+]
+
+creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+client = gspread.authorize(creds)
+
+spreadsheet_id = "1FhVIdKHlPFGoMjwZFtcKTOv7MwYOLQB6fzj8bo6DBuw"
+worksheet = client.open_by_key(spreadsheet_id).worksheet("Top 250 Stocks")
+
+ETF_NAME_KEYWORDS = ['ETF', 'BEES', 'REIT', 'INVIT', 'INVT', 'LIQUIDBEES', 'GOLDBEES', 'NIFTYBEES']
+MAX_PRICE = 15000
+
+def fetch_nse_etf_symbols():
+    url = "https://www.nseindia.com/api/etf"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9'
+    }
     try:
-        # NSE നമ്മളെ ബ്ലോക്ക് ചെയ്യാതിരിക്കാൻ ഒറിജിനൽ ബ്രൗസർ ആണെന്ന് കാണിക്കുന്ന ഹെഡറുകൾ
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Connection': 'keep-alive'
-        }
-        
-        # ഒരു സെഷൻ ഉണ്ടാക്കി വെബ്‌സൈറ്റ് സന്ദർശിക്കുന്നു
         session = requests.Session()
-        # ആദ്യം മെയിൻ സൈറ്റിൽ കയറി കുക്കീസ് (Cookies) എടുക്കുന്നു
-        session.get("https://www.nseindia.com", headers=headers, timeout=10)
-        
-        # ഇനി ലിങ്ക് ഡൗൺലോഡ് ചെയ്യുന്നു
-        response = session.get(url, headers=headers, timeout=15)
+        session.headers.update(headers)
+        session.get("https://www.nseindia.com", timeout=10)
+        response = session.get(url, timeout=15)
+        if response.status_code == 200:
+            data = response.json()
+            rows = data.get('data', [])
+            symbols = {row['symbol'].strip().upper() for row in rows if row.get('symbol')}
+            if symbols:
+                print(f"Fetched {len(symbols)} ETF symbols from NSE")
+                return symbols
+    except Exception as e:
+        print(f"Could not fetch NSE ETF list, using keyword fallback only: {e}")
+    return set()
+
+def is_etf_or_trust(symbol, name, etf_symbol_set):
+    symbol_upper = (symbol or '').strip().upper()
+    name_upper = (name or '').strip().upper()
+    if symbol_upper in etf_symbol_set:
+        return True
+    for keyword in ETF_NAME_KEYWORDS:
+        if keyword in symbol_upper or keyword in name_upper:
+            return True
+    return False
+
+# 3. NSE Data Fetcher
+def fetch_bhavcopy_for_date(date_obj, etf_symbol_set):
+    date_str = date_obj.strftime("%Y%m%d")
+    url = f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date_str}_F_0000.csv.zip"
+    
+    # NSE ബ്ലോക്ക് ചെയ്യാതിരിക്കാൻ ആവശ്യമായ ശക്തമായ ബ്രൗസർ ഹെഡറുകൾ
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5'
+    }
+
+    try:
+        print(f"Checking NSE file for date: {date_str}")
+        response = requests.get(url, headers=headers, timeout=25)
         
         if response.status_code == 200:
-            with open("nifty250.csv", "w", encoding='utf-8') as f:
-                f.write(response.text)
-            df = pd.read_csv("nifty250.csv")
-            tickers = df['Symbol'].tolist()
-            print(f"NSE-ൽ നിന്ന് {len(tickers)} കമ്പനികളുടെ ലിസ്റ്റ് വിജയകരമായി എടുത്തു!")
-            return [str(t).strip() + ".NS" for t in tickers if pd.notna(t)]
-            
+            with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+                csv_filename = z.namelist()[0]
+                with z.open(csv_filename) as f:
+                    df = pd.read_csv(f)
+                    df.columns = [c.strip() for c in df.columns]
+
+                    sym_col = next((c for c in ['TckrSymb', 'SYMBOL'] if c in df.columns), None)
+                    close_col = next((c for c in ['ClsPric', 'CLOSE'] if c in df.columns), None)
+                    series_col = next((c for c in ['SctySrs', 'SERIES'] if c in df.columns), None)
+                    turnover_col = next((c for c in ['TtlTrfVal', 'TOTTRDVAL'] if c in df.columns), None)
+                    name_col = next((c for c in ['FinInstrmNm', 'SECURITY'] if c in df.columns), None)
+
+                    if not all([sym_col, close_col, series_col, turnover_col]):
+                        print("Required columns missing in CSV structure!")
+                        return None
+
+                    # Filter only Equity shares
+                    df = df[df[series_col] == 'EQ']
+
+                    # Filter out ETFs / REITs / InvITs
+                    before_count = len(df)
+                    df = df[~df.apply(lambda row: is_etf_or_trust(row[sym_col], row[name_col] if name_col else '', etf_symbol_set), axis=1)]
+                    print(f"Removed {before_count - len(df)} ETF/REIT/InvIT rows")
+
+                    # Filter out high priced stocks
+                    df = df[df[close_col] <= MAX_PRICE]
+
+                    # Sort by Turnover to get most liquid stocks
+                    df = df.sort_values(by=turnover_col, ascending=False)
+                    top_250 = df.head(250)
+
+                    # Return Data
+                    return top_250[[sym_col, turnover_col, close_col]].values.tolist()
+        else:
+            print(f"File not available for {date_str} (Status Code: {response.status_code})")
     except Exception as e:
-        print("NSE ഡയറക്റ്റ് ലിസ്റ്റ് എടുക്കാൻ പറ്റിയില്ല, ബാക്കപ്പ് ഉപയോഗിക്കുന്നു:", e)
-    
-    # ഒരു കാരണവശാലും കോഡ് നിന്നുപോകാതിരിക്കാൻ നൽകുന്ന സുരക്ഷിത ബാക്കപ്പ് കമ്പനികൾ
-    return ["BEL.NS", "POLYCAB.NS", "TATACHEM.NS", "ASTRAL.NS", "VOLTAS.NS"]
+        print(f"Error fetching/processing Bhavcopy for {date_str}: {str(e)}")
+    return None
 
-def analyze_stocks():
-    tickers = get_nifty250_tickers()
-    screened_data = []
-    
-    print(f"മൊത്തം {len(tickers)} കമ്പനികൾ പരിശോധിക്കുന്നു...")
-    
-    for count, ticker in enumerate(tickers, 1):
-        time.sleep(1.2) # യാഹൂ ഫിനാൻസ് ബ്ലോക്ക് ചെയ്യാതിരിക്കാൻ ചെറിയ ഗ്യാപ്പ്
-        
-        company_name = ticker.replace(".NS", "")
-        current_price = 0
-        dma_200 = 0
-        current_rsi = 0
-        debt_to_equity = 0
-        status = "⏳ WAIT"
-        signal = "⚪ WAIT"
-        
-        try:
-            stock = yf.Ticker(ticker)
-            info = stock.info
-            company_name = info.get('longName', company_name)
-            
-            # Debt to Equity
-            debt = info.get('debtToEquity', None)
-            debt_to_equity = round(debt / 100.0, 2) if debt is not None else 0
-            
-            if debt_to_equity > 0.5:
-                status = "⚠️ HIGH DEBT"
-                screened_data.append([company_name, ticker.replace(".NS", ""), 0, 0, 0, debt_to_equity, status, signal])
-                continue
-                
-            # Prices History
-            hist = stock.history(period="1y")
-            if len(hist) < 200:
-                status = "⚠️ NO HISTORY"
-                screened_data.append([company_name, ticker.replace(".NS", ""), 0, 0, 0, debt_to_equity, status, signal])
-                continue
-                
-            close_prices = hist['Close']
-            current_price = round(close_prices.iloc[-1], 2)
-            dma_50 = close_prices.rolling(window=50).mean().iloc[-1]
-            dma_200 = round(close_prices.rolling(window=200).mean().iloc[-1], 2)
-            
-            # RSI
-            delta = close_prices.diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi_series = 100 - (100 / (1 + rs))
-            current_rsi = round(rsi_series.iloc[-1], 2)
-            prev_rsi = rsi_series.iloc[-2]
-            
-            # Strategy Conditions
-            is_above_dma = current_price > dma_50 and current_price > dma_200
-            is_near_support = current_price < (dma_50 * 1.05)
-            is_rsi_good = 30 <= current_rsi <= 48
-            is_rsi_turning_up = current_rsi > prev_rsi
-            
-            if is_rsi_good:
-                status = "📉 CHEAP"
-                if is_above_dma and is_near_support and is_rsi_turning_up:
-                    signal = "🟢 PERFECT BUY"
-                    
-        except Exception as e:
-            print(f"{ticker} എറർ: {e}")
-            status = "❌ DATA ERROR"
-            
-        screened_data.append([company_name, ticker.replace(".NS", ""), current_price, dma_200, current_rsi, debt_to_equity, status, signal])
-        print(f"({count}/{len(tickers)}) {company_name} - പരിശോധന കഴിഞ്ഞു")
-            
-    # Upload to Sheets
-    if screened_data and WEB_APP_URL != "YOUR_WEB_APP_URL_HERE":
-        try:
-            headers = {'Content-Type': 'application/json'}
-            response = requests.post(WEB_APP_URL, data=json.dumps(screened_data), headers=headers, timeout=60)
-            print("ഷീറ്റ് അപ്‌ഡേറ്റ് സ്റ്റാറ്റസ്:", response.text)
-        except Exception as e:
-            print("ഷീറ്റിലേക്ക് അയക്കാൻ പറ്റിയില്ല:", e)
+# 4. Execution Logic
+date = datetime.utcnow() + timedelta(hours=5, minutes=30) # IST conversion
+etf_symbol_set = fetch_nse_etf_symbols()
 
-if __name__ == "__main__":
-    analyze_stocks()
+data_to_insert = None
+fetched_date_str = ""
+
+for i in range(7):
+    test_date = date - timedelta(days=i)
+    if test_date.weekday() >= 5: # Skip weekends
+        continue
+    data_to_insert = fetch_bhavcopy_for_date(test_date, etf_symbol_set)
+    if data_to_insert:
+        fetched_date_str = test_date.strftime('%d-%b-%Y')
+        break
+
+# 5. Update Google Sheet
+if data_to_insert:
+    try:
+        worksheet.batch_clear(['A2:C251'])
+        worksheet.update(range_name='A2', values=data_to_insert)
+
+        ist_now = (datetime.utcnow() + timedelta(hours=5, minutes=30)).strftime('%d-%b %H:%M')
+        status_msg = f"Data Date: {fetched_date_str} | Last Update: {ist_now} (IST)"
+        
+        worksheet.update(range_name='K2', values=[[status_msg]])
+        print(f"SUCCESS: Sheet successfully updated for {fetched_date_str}")
+    except Exception as e:
+        print(f"Google Sheet API Error: {str(e)}")
+else:
+    print("FAILED: No valid NSE Bhavcopy file found in the last 7 days.")
